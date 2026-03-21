@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Ops Watchdog · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #080c10;
+    --surface:  #0d1117;
+    --card:     #111820;
+    --border:   #1e2d3d;
+    --border2:  #243446;
+    --green:    #00e5a0;
+    --green-dim:#00b57c;
+    --green-bg: rgba(0,229,160,0.06);
+    --amber:    #f5a623;
+    --amber-bg: rgba(245,166,35,0.07);
+    --red:      #ff4757;
+    --red-bg:   rgba(255,71,87,0.07);
+    --blue:     #3d9cf5;
+    --blue-bg:  rgba(61,156,245,0.07);
+    --text:     #c9d6e3;
+    --text-dim: #5a7a96;
+    --text-muted:#384f63;
+    --mono: 'JetBrains Mono', monospace;
+    --display: 'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Grid background */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,160,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,160,0.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrapper { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 0 24px 48px; }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+
+  .logo-group { display: flex; align-items: center; gap: 14px; }
+
+  .logo-icon {
+    width: 40px; height: 40px;
+    border: 1.5px solid var(--green);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    animation: pulse-border 3s ease-in-out infinite;
+  }
+  .logo-icon svg { width: 22px; height: 22px; }
+
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,229,160,0.3); }
+    50%       { box-shadow: 0 0 0 6px rgba(0,229,160,0); }
+  }
+
+  .logo-text h1 {
+    font-family: var(--display);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+  .logo-text span {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .header-right { display: flex; align-items: center; gap: 24px; }
+
+  .live-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--green); letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+    animation: blink 1.4s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  .last-updated { font-size: 11px; color: var(--text-dim); }
+
+  /* ── HEALTH SCORE ── */
+  .health-hero {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 40px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 48px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .health-hero::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 220px; height: 220px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,229,160,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .score-ring-wrap { position: relative; flex-shrink: 0; }
+  .score-ring-wrap svg { display: block; }
+
+  .score-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  .score-number {
+    font-family: var(--display);
+    font-size: 42px;
+    font-weight: 800;
+    color: var(--green);
+    line-height: 1;
+    display: block;
+  }
+  .score-label { font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 2px; }
+
+  .health-info { flex: 1; }
+  .health-info h2 {
+    font-family: var(--display);
+    font-size: 28px;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .health-info p { font-size: 13px; color: var(--text-dim); line-height: 1.7; max-width: 440px; }
+
+  .health-meta {
+    display: flex; gap: 32px; margin-top: 20px;
+  }
+  .meta-item label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 4px; }
+  .meta-item span { font-size: 15px; font-weight: 600; color: var(--text); }
+
+  /* ── GRID ── */
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+  /* ── METRIC CARD ── */
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .metric-card:hover { border-color: var(--border2); }
+
+  .metric-card .accent-line {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+  .accent-green  { background: var(--green); }
+  .accent-amber  { background: var(--amber); }
+  .accent-red    { background: var(--red); }
+  .accent-blue   { background: var(--blue); }
+
+  .metric-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+  .metric-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+
+  .metric-status {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 8px; border-radius: 4px;
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .status-ok      { background: var(--green-bg); color: var(--green); }
+  .status-warn    { background: var(--amber-bg); color: var(--amber); }
+  .status-critical{ background: var(--red-bg); color: var(--red); }
+  .status-info    { background: var(--blue-bg); color: var(--blue); }
+
+  .metric-value {
+    font-family: var(--display);
+    font-size: 38px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .metric-unit { font-family: var(--mono); font-size: 16px; font-weight: 300; }
+  .metric-sub  { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+
+  /* Mini sparkline */
+  .sparkline-wrap { margin-top: 16px; }
+  .sparkline-wrap canvas { width: 100%; height: 40px; display: block; }
+
+  /* Progress bar */
+  .progress-bar {
+    margin-top: 14px;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+
+  /* ── INCIDENT FEED ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--text-dim); font-weight: 600;
+  }
+  .card-count {
+    font-size: 11px; color: var(--text-muted);
+  }
+
+  .incident-list { list-style: none; }
+  .incident-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+    cursor: default;
+  }
+  .incident-item:last-child { border-bottom: none; }
+  .incident-item:hover { background: rgba(255,255,255,0.02); }
+
+  .sev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sev-critical { background: var(--red); box-shadow: 0 0 6px rgba(255,71,87,0.5); }
+  .sev-high     { background: var(--amber); }
+  .sev-medium   { background: var(--blue); }
+  .sev-low      { background: var(--green); }
+
+  .incident-title { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .incident-service { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .incident-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 3px;
+    font-weight: 600; letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .badge-resolved  { background: var(--green-bg); color: var(--green); }
+  .badge-active    { background: var(--red-bg); color: var(--red); }
+  .badge-analyzing { background: var(--amber-bg); color: var(--amber); }
+
+  .incident-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+  /* ── SERVICES TABLE ── */
+  .services-grid { display: grid; grid-template-columns: 1fr 60px 60px 80px; font-size: 12px; }
+  .sg-header { display: contents; }
+  .sg-header > div {
+    padding: 10px 24px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--text-muted); border-bottom: 1px solid var(--border);
+  }
+  .sg-row { display: contents; }
+  .sg-row > div {
+    padding: 13px 24px;
+    border-bottom: 1px solid rgba(30,45,61,0.5);
+    display: flex; align-items: center;
+    transition: background 0.15s;
+  }
+  .sg-row:hover > div { background: rgba(255,255,255,0.015); }
+  .sg-row:last-child > div { border-bottom: none; }
+
+  .svc-name { font-size: 13px; color: var(--text); }
+  .svc-host { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .uptime-bar { display: flex; gap: 2px; }
+  .uptime-seg { width: 4px; height: 16px; border-radius: 1px; }
+
+  .svc-latency { font-family: var(--mono); font-weight: 600; }
+
+  .health-pill {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 8px; border-radius: 4px;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── AI ACTIVITY LOG ── */
+  .ai-log { list-style: none; padding: 0; }
+  .ai-log-item {
+    display: flex; gap: 14px;
+    padding: 12px 24px;
+    border-bottom: 1px solid rgba(30,45,61,0.4);
+    align-items: flex-start;
+    transition: background 0.15s;
+  }
+  .ai-log-item:last-child { border-bottom: none; }
+  .ai-log-item:hover { background: rgba(255,255,255,0.015); }
+
+  .ai-log-icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-size: 12px; margin-top: 1px;
+  }
+  .icon-classify { background: var(--blue-bg); }
+  .icon-rca      { background: var(--amber-bg); }
+  .icon-postmortem { background: var(--green-bg); }
+  .icon-report   { background: rgba(150,100,255,0.08); color: #a78bfa; }
+
+  .ai-log-body { flex: 1; min-width: 0; }
+  .ai-log-action { font-size: 12px; color: var(--text); line-height: 1.5; }
+  .ai-log-action strong { color: #fff; }
+  .ai-log-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .ai-log-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+
+  /* ── FOOTER ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 20px 0;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-muted);
+  }
+  footer a { color: var(--green); text-decoration: none; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .health-hero   { animation: fadeUp 0.5s ease both; }
+  .metric-card   { animation: fadeUp 0.5s ease both; }
+  .metric-card:nth-child(1) { animation-delay: 0.05s; }
+  .metric-card:nth-child(2) { animation-delay: 0.10s; }
+  .metric-card:nth-child(3) { animation-delay: 0.15s; }
+  .card { animation: fadeUp 0.5s ease 0.2s both; }
+
+  @media (max-width: 900px) {
+    .grid-3 { grid-template-columns: 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .health-hero { flex-direction: column; gap: 24px; padding: 28px 24px; }
+    .services-grid { grid-template-columns: 1fr 80px; }
+    .sg-header > div:nth-child(3),
+    .sg-row > div:nth-child(3) { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo-group">
+      <div class="logo-icon">
+        <svg viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="11" cy="11" r="3.5" stroke="#00e5a0" stroke-width="1.5"/>
+          <path d="M11 2v3M11 17v3M2 11h3M17 11h3" stroke="#00e5a0" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M4.9 4.9l2.1 2.1M14.9 14.9l2.1 2.1M4.9 17.1l2.1-2.1M14.9 7.1l2.1-2.1" stroke="#00e5a0" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <h1>AI-Ops Watchdog</h1>
+        <span>Infrastructure Observability · Powered by GPT-4o</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-badge"><div class="live-dot"></div> Live</div>
+      <div class="last-updated" id="last-updated">Refreshing...</div>
+    </div>
+  </header>
+
+  <!-- HEALTH SCORE HERO -->
+  <div class="health-hero">
+    <div class="score-ring-wrap">
+      <svg width="140" height="140" viewBox="0 0 140 140">
+        <circle cx="70" cy="70" r="58" fill="none" stroke="#1e2d3d" stroke-width="8"/>
+        <circle id="score-arc" cx="70" cy="70" r="58" fill="none"
+          stroke="#00e5a0" stroke-width="8" stroke-linecap="round"
+          stroke-dasharray="364.4" stroke-dashoffset="365"
+          transform="rotate(-90 70 70)"
+          style="transition: stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1)"/>
+      </svg>
+      <div class="score-center">
+        <span class="score-number" id="health-score">—</span>
+        <span class="score-label">/ 100</span>
+      </div>
+    </div>
+    <div class="health-info">
+      <h2 id="health-status">Loading...</h2>
+      <p id="health-desc">Collecting metrics from your infrastructure. The AI analysis engine is standing by.</p>
+      <div class="health-meta">
+        <div class="meta-item">
+          <label>Incidents (7d)</label>
+          <span id="incident-count">—</span>
+        </div>
+        <div class="meta-item">
+          <label>Avg MTTR</label>
+          <span id="avg-mttr">—</span>
+        </div>
+        <div class="meta-item">
+          <label>AI Analyses</label>
+          <span id="ai-count">—</span>
+        </div>
+        <div class="meta-item">
+          <label>False Positives</label>
+          <span id="fp-rate">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- METRIC CARDS -->
+  <div class="grid-3">
+    <div class="metric-card">
+      <div class="accent-line accent-green"></div>
+      <div class="metric-header">
+        <span class="metric-label">CPU Usage</span>
+        <span class="metric-status status-ok" id="cpu-status">OK</span>
+      </div>
+      <div class="metric-value" id="cpu-value" style="color: var(--green)">—<span class="metric-unit">%</span></div>
+      <div class="metric-sub" id="cpu-sub">avg across all nodes</div>
+      <div class="progress-bar"><div class="progress-fill" id="cpu-bar" style="background: var(--green); width: 0%"></div></div>
+      <div class="sparkline-wrap"><canvas id="cpu-spark"></canvas></div>
+    </div>
+
+    <div class="metric-card">
+      <div class="accent-line accent-amber"></div>
+      <div class="metric-header">
+        <span class="metric-label">Memory Usage</span>
+        <span class="metric-status status-warn" id="mem-status">WARN</span>
+      </div>
+      <div class="metric-value" id="mem-value" style="color: var(--amber)">—<span class="metric-unit">%</span></div>
+      <div class="metric-sub" id="mem-sub">avg across all nodes</div>
+      <div class="progress-bar"><div class="progress-fill" id="mem-bar" style="background: var(--amber); width: 0%"></div></div>
+      <div class="sparkline-wrap"><canvas id="mem-spark"></canvas></div>
+    </div>
+
+    <div class="metric-card">
+      <div class="accent-line accent-blue"></div>
+      <div class="metric-header">
+        <span class="metric-label">Latency p95</span>
+        <span class="metric-status status-ok" id="lat-status">OK</span>
+      </div>
+      <div class="metric-value" id="lat-value" style="color: var(--blue)">—<span class="metric-unit">s</span></div>
+      <div class="metric-sub" id="lat-sub">http request duration</div>
+      <div class="progress-bar"><div class="progress-fill" id="lat-bar" style="background: var(--blue); width: 0%"></div></div>
+      <div class="sparkline-wrap"><canvas id="lat-spark"></canvas></div>
+    </div>
+  </div>
+
+  <!-- INCIDENTS + AI LOG -->
+  <div class="grid-2">
+
+    <!-- Incident Feed -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Recent Incidents</span>
+        <span class="card-count" id="incident-label">last 7 days</span>
+      </div>
+      <ul class="incident-list" id="incident-list"></ul>
+    </div>
+
+    <!-- AI Activity Log -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">AI Activity Log</span>
+        <span class="card-count" id="ai-log-label">GPT-4o executions</span>
+      </div>
+      <ul class="ai-log" id="ai-log-list"></ul>
+    </div>
+
+  </div>
+
+  <!-- SERVICES TABLE -->
+  <div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+      <span class="card-title">Service Health</span>
+      <span class="card-count">monitored endpoints</span>
+    </div>
+    <div class="services-grid">
+      <div class="sg-header">
+        <div>Service</div>
+        <div>Uptime</div>
+        <div>Latency</div>
+        <div>Health</div>
+      </div>
+      <div id="services-rows"></div>
+    </div>
+  </div>
+
+  <footer>
+    <span>AI-Ops Watchdog · <a href="https://github.com/Paula-Tech007/ai-ops-watchdog-n8n" target="_blank">Paula-Tech007</a></span>
+    <span>n8n · GPT-4o · Prometheus</span>
+  </footer>
+
+</div>
+
+<script>
+// ─── SIMULATED LIVE DATA ───────────────────────────────────────────
+// In production: replace fetch calls with your n8n webhook or API endpoints
+// e.g. const res = await fetch('https://your-n8n/webhook/dashboard-data')
+
+const INCIDENTS = [
+  { sev:'critical', title:'DB connection pool exhausted', service:'payment-api', badge:'resolved',  time:'2h ago' },
+  { sev:'high',     title:'Memory leak detected on pod',  service:'order-service',badge:'resolved',  time:'8h ago' },
+  { sev:'medium',   title:'p95 latency spike > 2s',       service:'api-gateway',  badge:'resolved',  time:'1d ago' },
+  { sev:'high',     title:'Deploy #482 caused regression', service:'checkout-svc', badge:'resolved',  time:'2d ago' },
+  { sev:'low',      title:'Disk usage > 80% warning',     service:'log-collector', badge:'resolved', time:'3d ago' },
+  { sev:'medium',   title:'Auth service 503 burst',        service:'auth-api',     badge:'resolved',  time:'4d ago' },
+];
+
+const AI_LOG = [
+  { type:'rca',       icon:'🔍', label:'icon-rca',       action:'Generated RCA for <strong>INC-1705316400</strong> — root cause: connection pool exhaustion after deploy #482', model:'gpt-4o', tokens:'1,842', time:'2h ago' },
+  { type:'classify',  icon:'⚡', label:'icon-classify',   action:'Classified 34 log entries from <strong>payment-api</strong> — 1 anomaly, 33 suppressed as noise', model:'gpt-4o', tokens:'612', time:'2h ago' },
+  { type:'postmortem',icon:'📋', label:'icon-postmortem', action:'Wrote postmortem for <strong>INC-1705316400</strong> — Notion page + GitHub issue #47 created', model:'gpt-4o', tokens:'2,104', time:'2h ago' },
+  { type:'classify',  icon:'⚡', label:'icon-classify',   action:'Classified log burst from <strong>order-service</strong> — memory_leak detected, alert fired', model:'gpt-4o', tokens:'480', time:'8h ago' },
+  { type:'rca',       icon:'🔍', label:'icon-rca',        action:'Generated RCA for <strong>INC-1705280000</strong> — root cause: JVM heap misconfiguration', model:'gpt-4o', tokens:'1,611', time:'8h ago' },
+  { type:'report',    icon:'📊', label:'icon-report',     action:'Generated weekly ops report — health score 87/100, 3 recommendations issued to team', model:'gpt-4o', tokens:'3,214', time:'2d ago' },
+];
+
+const SERVICES = [
+  { name:'payment-api',   host:'prod-worker-01', uptime:[1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,1], latency:'142ms', health:'healthy' },
+  { name:'order-service', host:'prod-worker-02', uptime:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1], latency:'89ms',  health:'healthy' },
+  { name:'api-gateway',   host:'prod-lb-01',     uptime:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], latency:'28ms',  health:'healthy' },
+  { name:'auth-api',      host:'prod-worker-03', uptime:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1], latency:'204ms', health:'degraded' },
+  { name:'log-collector', host:'prod-infra-01',  uptime:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], latency:'11ms',  health:'healthy' },
+];
+
+// ─── METRICS STATE (simulated with slight jitter) ──────────────────
+let metrics = { cpu: 43.2, mem: 71.8, lat: 0.142 };
+
+function jitter(v, pct) { return Math.max(0, v + (Math.random() - 0.5) * 2 * pct); }
+
+const sparkData = {
+  cpu: Array.from({length:20}, (_, i) => 38 + Math.sin(i*0.4) * 8 + Math.random() * 4),
+  mem: Array.from({length:20}, (_, i) => 68 + Math.sin(i*0.3) * 6 + Math.random() * 4),
+  lat: Array.from({length:20}, (_, i) => 0.12 + Math.sin(i*0.5) * 0.04 + Math.random() * 0.02),
+};
+
+// ─── SPARKLINE ────────────────────────────────────────────────────
+function drawSparkline(canvasId, data, color) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const W = rect.width || canvas.offsetWidth || 200;
+  const H = 40;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const min = Math.min(...data) * 0.95;
+  const max = Math.max(...data) * 1.05;
+  const scaleY = v => H - ((v - min) / (max - min)) * (H - 4) - 2;
+  const scaleX = i => (i / (data.length - 1)) * W;
+
+  // Fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, color + '30');
+  grad.addColorStop(1, color + '00');
+  ctx.beginPath();
+  ctx.moveTo(scaleX(0), H);
+  data.forEach((v, i) => ctx.lineTo(scaleX(i), scaleY(v)));
+  ctx.lineTo(scaleX(data.length - 1), H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  data.forEach((v, i) => i === 0 ? ctx.moveTo(scaleX(i), scaleY(v)) : ctx.lineTo(scaleX(i), scaleY(v)));
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Last point dot
+  ctx.beginPath();
+  const lx = scaleX(data.length - 1), ly = scaleY(data[data.length - 1]);
+  ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// ─── RENDER FUNCTIONS ──────────────────────────────────────────────
+function renderMetrics() {
+  const cpu = metrics.cpu, mem = metrics.mem, lat = metrics.lat;
+
+  document.getElementById('cpu-value').innerHTML = cpu.toFixed(1) + '<span class="metric-unit">%</span>';
+  document.getElementById('mem-value').innerHTML = mem.toFixed(1) + '<span class="metric-unit">%</span>';
+  document.getElementById('lat-value').innerHTML = lat.toFixed(3) + '<span class="metric-unit">s</span>';
+
+  document.getElementById('cpu-bar').style.width = cpu + '%';
+  document.getElementById('mem-bar').style.width = mem + '%';
+  document.getElementById('lat-bar').style.width = Math.min(lat / 3 * 100, 100) + '%';
+
+  const cpuSt  = cpu < 70 ? ['OK','status-ok'] : cpu < 85 ? ['WARN','status-warn'] : ['CRIT','status-critical'];
+  const memSt  = mem < 75 ? ['OK','status-ok'] : mem < 90 ? ['WARN','status-warn'] : ['CRIT','status-critical'];
+  const latSt  = lat < 1  ? ['OK','status-ok'] : lat < 2  ? ['WARN','status-warn'] : ['CRIT','status-critical'];
+  const setStatus = (id, [label, cls]) => { const el = document.getElementById(id); el.textContent = label; el.className = 'metric-status ' + cls; };
+  setStatus('cpu-status', cpuSt);
+  setStatus('mem-status', memSt);
+  setStatus('lat-status', latSt);
+}
+
+function renderHealthScore(score) {
+  document.getElementById('health-score').textContent = score;
+  const circumference = 2 * Math.PI * 58;
+  const offset = circumference - (score / 100) * circumference;
+  document.getElementById('score-arc').style.strokeDashoffset = offset;
+  document.getElementById('score-arc').style.stroke = score >= 80 ? '#00e5a0' : score >= 60 ? '#f5a623' : '#ff4757';
+
+  const statusMap = [
+    [80, 'Systems Nominal', 'All infrastructure metrics within healthy thresholds. AI anomaly detector is actively monitoring with no active alerts.'],
+    [60, 'Minor Degradation', 'Some metrics approaching warning levels. AI Watchdog is monitoring closely and ready to trigger incident response.'],
+    [0,  'Degraded State',   'Infrastructure health below acceptable thresholds. AI incident response pipeline is active.'],
+  ];
+  const [, title, desc] = statusMap.find(([min]) => score >= min);
+  document.getElementById('health-status').textContent = title;
+  document.getElementById('health-desc').textContent   = desc;
+}
+
+function renderIncidents() {
+  const list = document.getElementById('incident-list');
+  list.innerHTML = INCIDENTS.map(inc => `
+    <li class="incident-item">
+      <div class="sev-dot sev-${inc.sev}"></div>
+      <div>
+        <div class="incident-title">${inc.title}</div>
+        <div class="incident-service">${inc.service}</div>
+      </div>
+      <span class="incident-badge badge-${inc.badge}">${inc.badge}</span>
+      <span class="incident-time">${inc.time}</span>
+    </li>
+  `).join('');
+}
+
+function renderAILog() {
+  const list = document.getElementById('ai-log-list');
+  list.innerHTML = AI_LOG.map(item => `
+    <li class="ai-log-item">
+      <div class="ai-log-icon ${item.label}">${item.icon}</div>
+      <div class="ai-log-body">
+        <div class="ai-log-action">${item.action}</div>
+        <div class="ai-log-meta">${item.model} · ${item.tokens} tokens</div>
+      </div>
+      <div class="ai-log-time">${item.time}</div>
+    </li>
+  `).join('');
+}
+
+function renderServices() {
+  const container = document.getElementById('services-rows');
+  container.innerHTML = SERVICES.map(svc => {
+    const uptimePct = Math.round((svc.uptime.filter(Boolean).length / svc.uptime.length) * 100);
+    const segs = svc.uptime.map(u => `<div class="uptime-seg" style="background:${u ? 'var(--green)' : 'var(--red)'}; opacity:${u ? 0.8 : 1}"></div>`).join('');
+    const hColor = svc.health === 'healthy' ? 'status-ok' : 'status-warn';
+    const latMs  = parseInt(svc.latency);
+    const latColor = latMs < 150 ? 'var(--green)' : latMs < 300 ? 'var(--amber)' : 'var(--red)';
+    return `
+      <div class="sg-row">
+        <div><div class="svc-name">${svc.name}</div><div class="svc-host">${svc.host}</div></div>
+        <div><div class="uptime-bar">${segs}</div></div>
+        <div><span class="svc-latency" style="color:${latColor}">${svc.latency}</span></div>
+        <div><span class="health-pill metric-status ${hColor}">${uptimePct}%</span></div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateTimestamp() {
+  document.getElementById('last-updated').textContent =
+    'Updated ' + new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+// ─── INIT & LIVE UPDATE LOOP ───────────────────────────────────────
+function init() {
+  renderIncidents();
+  renderAILog();
+  renderServices();
+
+  document.getElementById('incident-count').textContent = INCIDENTS.length;
+  document.getElementById('avg-mttr').textContent = '11 min';
+  document.getElementById('ai-count').textContent = AI_LOG.length;
+  document.getElementById('fp-rate').textContent = '3.2%';
+
+  update();
+
+  setTimeout(() => drawSparkline('cpu-spark', sparkData.cpu, '#00e5a0'), 100);
+  setTimeout(() => drawSparkline('mem-spark', sparkData.mem, '#f5a623'), 150);
+  setTimeout(() => drawSparkline('lat-spark', sparkData.lat, '#3d9cf5'), 200);
+}
+
+function update() {
+  metrics.cpu = jitter(metrics.cpu, 3);
+  metrics.mem = jitter(metrics.mem, 2);
+  metrics.lat = Math.max(0.05, jitter(metrics.lat, 0.02));
+
+  sparkData.cpu.push(metrics.cpu); sparkData.cpu.shift();
+  sparkData.mem.push(metrics.mem); sparkData.mem.shift();
+  sparkData.lat.push(metrics.lat); sparkData.lat.shift();
+
+  const score = Math.round(100 - (metrics.cpu * 0.35 + metrics.mem * 0.35 + Math.min(metrics.lat * 10, 100) * 0.30));
+
+  renderMetrics();
+  renderHealthScore(score);
+  updateTimestamp();
+
+  drawSparkline('cpu-spark', sparkData.cpu, '#00e5a0');
+  drawSparkline('mem-spark', sparkData.mem, '#f5a623');
+  drawSparkline('lat-spark', sparkData.lat, '#3d9cf5');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  init();
+  setInterval(update, 4000);
+});
+
+window.addEventListener('resize', () => {
+  drawSparkline('cpu-spark', sparkData.cpu, '#00e5a0');
+  drawSparkline('mem-spark', sparkData.mem, '#f5a623');
+  drawSparkline('lat-spark', sparkData.lat, '#3d9cf5');
+});
+</script>
+</body>
+</html>

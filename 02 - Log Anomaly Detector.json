@@ -1,0 +1,277 @@
+{
+  "name": "02 - Log Anomaly Detector",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c7458f67-6228-405b-a9e1-98f07e21e011",
+      "name": "Webhook - Receive Logs",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        208
+      ],
+      "webhookId": "log-ingest-watchdog"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nconst logs = Array.isArray(body.logs) ? body.logs : [body];\n\nconst formatted = logs.map(l => ({\n  timestamp: l.timestamp ?? new Date().toISOString(),\n  level: (l.level ?? l.severity ?? 'unknown').toUpperCase(),\n  service: l.service ?? l.source ?? 'unknown',\n  message: l.message ?? l.msg ?? JSON.stringify(l),\n  host: l.host ?? l.hostname ?? 'unknown'\n}));\n\nconst critical = formatted.filter(l => ['ERROR','CRITICAL','FATAL','PANIC'].includes(l.level));\n\nreturn [{ json: { all_logs: formatted, critical_logs: critical, has_critical: critical.length > 0, total: formatted.length, critical_count: critical.length } }];"
+      },
+      "id": "230ffbec-1bd5-4dc0-872a-4cffafc2a3dd",
+      "name": "Normalize & Filter Logs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "has-critical",
+              "leftValue": "={{ $json.has_critical }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cb61728d-d60d-413d-959b-efa78d38db7f",
+      "name": "Has Critical Logs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat"
+      },
+      "id": "6e9bce90-992b-42e6-8de3-2bde7243daaa",
+      "name": "AI - Classify Anomaly",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        -656,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiRaw = $('AI - Classify Anomaly').first().json.message?.content ?? '{}';\nlet analysis;\ntry {\n  const cleaned = aiRaw.replace(/```json|```/g, '').trim();\n  analysis = JSON.parse(cleaned);\n} catch(e) {\n  analysis = { is_anomaly: true, severity: 'unknown', classification: 'unknown', summary: 'Parse error - manual review needed', likely_cause: 'AI response malformed', recommended_action: 'Check logs manually', false_positive_probability: 'low' };\n}\n\nconst logs = $('Normalize & Filter Logs').first().json;\n\nreturn [{ json: { ...analysis, critical_logs: logs.critical_logs, service: logs.critical_logs[0]?.service ?? 'unknown', timestamp: new Date().toISOString() } }];"
+      },
+      "id": "441fcb12-17bb-44cb-9842-2eec25ea9400",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "is-real-anomaly",
+              "leftValue": "={{ $json.is_anomaly }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "not-false-positive",
+              "leftValue": "={{ $json.false_positive_probability }}",
+              "rightValue": "high",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "31cc5d72-23a5-4c28-9a4d-b068d754660c",
+      "name": "Real Anomaly?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"🚨 *AI-OPS WATCHDOG — Anomaly Detected*\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🚨 Anomaly Detected — \" + $json.severity.toUpperCase() }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Service:*\\n\" + $json.service },\n        { \"type\": \"mrkdwn\", \"text\": \"*Classification:*\\n\" + $json.classification },\n        { \"type\": \"mrkdwn\", \"text\": \"*Summary:*\\n\" + $json.summary },\n        { \"type\": \"mrkdwn\", \"text\": \"*Likely Cause:*\\n\" + $json.likely_cause }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Recommended Action:*\\n\" + $json.recommended_action }\n    },\n    {\n      \"type\": \"context\",\n      \"elements\": [{ \"type\": \"mrkdwn\", \"text\": \"Detected at \" + $json.timestamp + \" | False positive probability: \" + $json.false_positive_probability }]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "caefcba3-4333-429b-9dee-dcfce22a8541",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WEBHOOK_INCIDENT_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "source",
+              "value": "log-anomaly-detector"
+            },
+            {
+              "name": "analysis",
+              "value": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6092cfec-07fe-4a5d-a4c0-bf558895e48a",
+      "name": "Trigger RCA Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"classified\": true, \"is_anomaly\": false }",
+        "options": {}
+      },
+      "id": "0eede195-d8de-40e8-b698-e12290eeabb2",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -656,
+        368
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Receive Logs": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Filter Logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Filter Logs": {
+      "main": [
+        [
+          {
+            "node": "Has Critical Logs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Critical Logs?": {
+      "main": [
+        [
+          {
+            "node": "AI - Classify Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Classify Anomaly": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Real Anomaly?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Real Anomaly?": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger RCA Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "84769e7e-f58e-4c78-8680-d1939d018b36",
+  "meta": {
+    "instanceId": "7f529f90c5d9464ac1f0ef25f1ea43cd6e4b761556ecf3874eade97f664ea915"
+  },
+  "id": "LqvA57ItShOhWTaJ",
+  "tags": []
+}

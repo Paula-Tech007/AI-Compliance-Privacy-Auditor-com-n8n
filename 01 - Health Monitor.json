@@ -1,0 +1,295 @@
+{
+  "name": "01 - Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "c9f79a18-afef-4eb0-8993-e43626c3bb03",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3664662b-2efc-401a-8820-ee9d1154f837",
+      "name": "Fetch CPU Usage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "51e0257d-32c9-4a39-b3e7-6e993aa8e2bb",
+      "name": "Fetch Memory Usage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1414b77e-8041-46b3-a44c-f370fe25cf99",
+      "name": "Fetch Latency p95",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cpuData = $('Fetch CPU Usage').first().json;\nconst memData = $('Fetch Memory Usage').first().json;\nconst latData = $('Fetch Latency p95').first().json;\n\nconst cpuValue = parseFloat(cpuData?.data?.result?.[0]?.value?.[1] ?? 0);\nconst memValue = parseFloat(memData?.data?.result?.[0]?.value?.[1] ?? 0);\nconst latValue = parseFloat(latData?.data?.result?.[0]?.value?.[1] ?? 0);\n\nconst alerts = [];\nif (cpuValue > 85) alerts.push({ metric: 'CPU', value: cpuValue.toFixed(1), threshold: 85, unit: '%' });\nif (memValue > 90) alerts.push({ metric: 'Memory', value: memValue.toFixed(1), threshold: 90, unit: '%' });\nif (latValue > 2) alerts.push({ metric: 'Latency p95', value: latValue.toFixed(3), threshold: 2, unit: 's' });\n\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    cpu: cpuValue,\n    memory: memValue,\n    latency_p95: latValue,\n    alerts,\n    has_alerts: alerts.length > 0\n  }\n}];"
+      },
+      "id": "277b0012-0a6a-41ba-948a-5ce7514664a3",
+      "name": "Evaluate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-alerts",
+              "leftValue": "={{ $json.has_alerts }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c8042cd7-5fbe-46b9-af58-ba948b3aff31",
+      "name": "Has Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        464,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WEBHOOK_ANOMALY_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "source",
+              "value": "health-monitor"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "alerts",
+              "value": "={{ JSON.stringify($json.alerts) }}"
+            },
+            {
+              "name": "metrics",
+              "value": "={{ JSON.stringify({ cpu: $json.cpu, memory: $json.memory, latency_p95: $json.latency_p95 }) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c6d36bcf-85cf-4086-97ab-dfb603700f4c",
+      "name": "Trigger Incident Flow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WEBHOOK_METRICS_STORE_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "payload",
+              "value": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bb37d09e-5838-444f-a5d4-38254e87b4e6",
+      "name": "Store Metrics (OK)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        288
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch CPU Usage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Memory Usage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Latency p95",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch CPU Usage": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Memory Usage": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Latency p95": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Metrics": {
+      "main": [
+        [
+          {
+            "node": "Has Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Incident Flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store Metrics (OK)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "34d5a062-4b31-41fb-84aa-8f9a71b6517f",
+  "meta": {
+    "instanceId": "7f529f90c5d9464ac1f0ef25f1ea43cd6e4b761556ecf3874eade97f664ea915"
+  },
+  "id": "2sHTSlSZn0g2t4Kj",
+  "tags": []
+}

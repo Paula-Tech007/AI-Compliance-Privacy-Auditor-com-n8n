@@ -1,0 +1,217 @@
+{
+  "name": "03 - Incident RCA Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "incident-rca",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "a82ae30d-0301-41bc-a5c1-8f627a6b15e9",
+      "name": "Webhook - Incident Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ],
+      "webhookId": "incident-rca-watchdog"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nconst now = new Date();\nconst windowStart = new Date(now.getTime() - 30 * 60 * 1000).toISOString();\n\nlet analysis = {};\ntry { analysis = typeof body.analysis === 'string' ? JSON.parse(body.analysis) : (body.analysis ?? {}); } catch(e) {}\n\nreturn [{\n  json: {\n    incident_id: `INC-${Date.now()}`,\n    source: body.source ?? 'unknown',\n    received_at: now.toISOString(),\n    window_start: windowStart,\n    analysis,\n    service: analysis.service ?? body.service ?? 'unknown',\n    severity: analysis.severity ?? body.severity ?? 'unknown',\n    alerts: body.alerts ? (typeof body.alerts === 'string' ? JSON.parse(body.alerts) : body.alerts) : [],\n    metrics: body.metrics ? (typeof body.metrics === 'string' ? JSON.parse(body.metrics) : body.metrics) : {}\n  }\n}];"
+      },
+      "id": "9cb8a14b-a1b2-4cd4-a290-c499dc6e8d82",
+      "name": "Prepare Incident Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query_range",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "100 - (avg(rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)"
+            },
+            {
+              "name": "start",
+              "value": "={{ $json.window_start }}"
+            },
+            {
+              "name": "end",
+              "value": "={{ $json.received_at }}"
+            },
+            {
+              "name": "step",
+              "value": "60"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8024374b-bcf9-4b35-926b-23cdbfefca2a",
+      "name": "Fetch 30min Metric History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat"
+      },
+      "id": "0ad4df65-cdad-4c4c-a9c1-c71f6f4934c7",
+      "name": "AI - Generate RCA",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiRaw = $('AI - Generate RCA').first().json.message?.content ?? '{}';\nconst incidentCtx = $('Prepare Incident Context').first().json;\n\nlet rca;\ntry {\n  rca = JSON.parse(aiRaw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  rca = {\n    incident_title: 'RCA Parse Error — Manual Review Required',\n    root_cause: 'AI response could not be parsed',\n    contributing_factors: [],\n    impact: 'Unknown',\n    timeline: [],\n    immediate_actions: ['Review raw logs manually', 'Check Prometheus dashboards'],\n    remediation_steps: [],\n    prevention: [],\n    estimated_mttr_minutes: 60\n  };\n}\n\nreturn [{ json: {\n  ...rca,\n  incident_id: incidentCtx.incident_id,\n  service: incidentCtx.service,\n  severity: incidentCtx.severity,\n  generated_at: new Date().toISOString()\n}}];"
+      },
+      "id": "118d1079-a6fc-40bf-a4ae-2807a51cf9d3",
+      "name": "Parse & Enrich RCA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    { \"type\": \"header\", \"text\": { \"type\": \"plain_text\", \"text\": \"🔍 RCA Ready — \" + $json.incident_id } },\n    { \"type\": \"section\", \"text\": { \"type\": \"mrkdwn\", \"text\": \"*\" + $json.incident_title + \"*\" } },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Service:*\\n\" + $json.service },\n        { \"type\": \"mrkdwn\", \"text\": \"*Severity:*\\n\" + $json.severity },\n        { \"type\": \"mrkdwn\", \"text\": \"*Est. MTTR:*\\n\" + $json.estimated_mttr_minutes + \" min\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Impact:*\\n\" + $json.impact }\n      ]\n    },\n    { \"type\": \"section\", \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Root Cause:*\\n\" + $json.root_cause } },\n    { \"type\": \"section\", \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Immediate Actions:*\\n\" + $json.immediate_actions.map((a, i) => (i+1) + '. ' + a).join('\\n') } },\n    { \"type\": \"divider\" },\n    { \"type\": \"context\", \"elements\": [{ \"type\": \"mrkdwn\", \"text\": \"Generated at \" + $json.generated_at + \" by AI-Ops Watchdog\" }] }\n  ]\n}",
+        "options": {}
+      },
+      "id": "c662c53e-788b-48f5-8207-812cff738833",
+      "name": "Post RCA to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WEBHOOK_POSTMORTEM_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "rca",
+              "value": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "672e0651-ef6b-4aad-8c79-ff9f37ea3497",
+      "name": "Trigger Postmortem Writer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        192
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Incident Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Incident Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Incident Context": {
+      "main": [
+        [
+          {
+            "node": "Fetch 30min Metric History",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI - Generate RCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch 30min Metric History": {
+      "main": [
+        [
+          {
+            "node": "AI - Generate RCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Generate RCA": {
+      "main": [
+        [
+          {
+            "node": "Parse & Enrich RCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Enrich RCA": {
+      "main": [
+        [
+          {
+            "node": "Post RCA to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Postmortem Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "86e3164a-8211-4eaf-b9bd-7b79b055b4aa",
+  "meta": {
+    "instanceId": "7f529f90c5d9464ac1f0ef25f1ea43cd6e4b761556ecf3874eade97f664ea915"
+  },
+  "id": "ASjaoqDNp9vXEqby",
+  "tags": []
+}

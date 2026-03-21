@@ -1,0 +1,193 @@
+{
+  "name": "04 - Postmortem Writer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "postmortem-writer",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "97ca8292-34f7-446b-8097-4c32d09d2c52",
+      "name": "Webhook - Postmortem Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        112
+      ],
+      "webhookId": "postmortem-writer-watchdog"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nlet rca;\ntry { rca = typeof body.rca === 'string' ? JSON.parse(body.rca) : (body.rca ?? body); } catch(e) { rca = body; }\n\nconst dateStr = new Date().toISOString().split('T')[0];\nconst title = `[${dateStr}] Postmortem: ${rca.incident_id ?? 'INC-UNKNOWN'} — ${rca.incident_title ?? 'Incident'}`;\n\nconst timelineTable = (rca.timeline ?? []).map(t => `| ${t.time} | ${t.event} |`).join('\\n');\nconst immediateList = (rca.immediate_actions ?? []).map((a, i) => `- [x] ${a}`).join('\\n');\nconst remediationList = (rca.remediation_steps ?? []).map((s, i) => `- [ ] ${s}`).join('\\n');\nconst preventionList = (rca.prevention ?? []).map((p, i) => `- [ ] ${p}`).join('\\n');\nconst factorsList = (rca.contributing_factors ?? []).map(f => `- ${f}`).join('\\n');\n\nconst markdown = `# ${title}\n\n## Overview\n| Field | Value |\n|-------|-------|\n| **Incident ID** | ${rca.incident_id ?? 'N/A'} |\n| **Service** | ${rca.service ?? 'N/A'} |\n| **Severity** | ${rca.severity ?? 'N/A'} |\n| **Date** | ${dateStr} |\n| **Est. MTTR** | ${rca.estimated_mttr_minutes ?? '?'} minutes |\n\n## Impact\n${rca.impact ?? 'Not assessed'}\n\n## Root Cause\n${rca.root_cause ?? 'Under investigation'}\n\n## Contributing Factors\n${factorsList || '- None identified'}\n\n## Timeline\n| Time | Event |\n|------|-------|\n${timelineTable || '| T-0 | Incident detected |'}\n\n## Immediate Actions Taken\n${immediateList || '- Manual review performed'}\n\n## Remediation Steps\n${remediationList || '- No steps defined'}\n\n## Prevention / Long-term Fixes\n${preventionList || '- No prevention steps defined'}\n\n---\n*Generated automatically by AI-Ops Watchdog at ${new Date().toISOString()}*\n`;\n\nreturn [{ json: { rca, title, markdown, incident_id: rca.incident_id, service: rca.service, severity: rca.severity } }];"
+      },
+      "id": "25b44937-388b-4dbf-8ccc-81c1b2f7eb95",
+      "name": "Build Postmortem Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "pageId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "title": "={{ $json.title }}",
+        "blockUi": {
+          "blockValues": [
+            {
+              "textContent": "={{ $json.markdown }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e084cff7-6823-41eb-9e55-41d2b944f843",
+      "name": "Create Notion Postmortem",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "title": "={{ $json.title }}",
+        "body": "={{ $json.markdown }}",
+        "labels": {
+          "label": [
+            "incident",
+            "postmortem",
+            "={{ $json.severity }}"
+          ]
+        },
+        "assignees": []
+      },
+      "id": "b3883023-8611-4f3c-b352-1f2250ebfa8c",
+      "name": "Create GitHub Issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "4dd324df-f9ea-4359-bb60-ba13abc7d36e"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    { \"type\": \"section\", \"text\": { \"type\": \"mrkdwn\", \"text\": \"📋 *Postmortem created* for \" + $('Build Postmortem Markdown').first().json.incident_id } },\n    { \"type\": \"section\", \"fields\": [\n      { \"type\": \"mrkdwn\", \"text\": \"*Notion:* <\" + ($('Create Notion Postmortem').first().json.url ?? '#') + \"|View page>\" },\n      { \"type\": \"mrkdwn\", \"text\": \"*GitHub Issue:* <\" + ($('Create GitHub Issue').first().json.html_url ?? '#') + \"|View issue>\" }\n    ]}\n  ]\n}",
+        "options": {}
+      },
+      "id": "f565c557-a0ca-4ba7-ab48-6f67b08b4a7a",
+      "name": "Notify Postmortem Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"message\": \"Postmortem created\" }",
+        "options": {}
+      },
+      "id": "58bb7f2a-7dc0-41bf-ae45-cb05df412090",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        448,
+        112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Postmortem Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Postmortem Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Postmortem Markdown": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Postmortem",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create GitHub Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Notion Postmortem": {
+      "main": [
+        [
+          {
+            "node": "Notify Postmortem Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GitHub Issue": {
+      "main": [
+        [
+          {
+            "node": "Notify Postmortem Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Postmortem Ready": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "de1490ea-b545-4af1-a6f0-c7263f4bccb8",
+  "meta": {
+    "instanceId": "7f529f90c5d9464ac1f0ef25f1ea43cd6e4b761556ecf3874eade97f664ea915"
+  },
+  "id": "LKEuBa07LadoD8go",
+  "tags": []
+}

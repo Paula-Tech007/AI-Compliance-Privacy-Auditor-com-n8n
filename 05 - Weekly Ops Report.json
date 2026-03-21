@@ -1,0 +1,298 @@
+{
+  "name": "05 - Weekly Ops Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "9b28fd4a-dd22-41d7-91a7-f626afd5ab7b",
+      "name": "Every Sunday 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -448,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\nreturn [{ json: {\n  report_date: now.toISOString().split('T')[0],\n  week_start: weekStart.toISOString(),\n  week_end: now.toISOString(),\n  week_start_unix: Math.floor(weekStart.getTime() / 1000),\n  week_end_unix: Math.floor(now.getTime() / 1000)\n} }];"
+      },
+      "id": "331650a8-b34f-4b97-8af5-27acf391163d",
+      "name": "Set Week Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time((100 - (avg(rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100))[7d:5m])"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "61a6afe6-feb8-40ca-af24-15173d8d7485",
+      "name": "Avg CPU - Week",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time((1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))[7d:5m]) * 100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "14c0b704-f4ad-4b38-8b07-3fedfb86c719",
+      "name": "Avg Memory - Week",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PROMETHEUS_URL }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time(histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))[7d:5m])"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0f241e56-034b-47e5-86a1-9d9bb4c8c162",
+      "name": "Avg Latency - Week",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cpu = parseFloat($('Avg CPU - Week').first().json?.data?.result?.[0]?.value?.[1] ?? 0);\nconst mem = parseFloat($('Avg Memory - Week').first().json?.data?.result?.[0]?.value?.[1] ?? 0);\nconst lat = parseFloat($('Avg Latency - Week').first().json?.data?.result?.[0]?.value?.[1] ?? 0);\nconst window = $('Set Week Window').first().json;\n\nconst healthScore = Math.round(100 - (cpu * 0.35 + mem * 0.35 + Math.min(lat * 10, 100) * 0.30));\n\nconst trend = (v, good, warn) => v < good ? '🟢' : v < warn ? '🟡' : '🔴';\n\nreturn [{\n  json: {\n    report_date: window.report_date,\n    week_start: window.week_start.split('T')[0],\n    week_end: window.week_end.split('T')[0],\n    metrics: {\n      avg_cpu: cpu.toFixed(1),\n      avg_memory: mem.toFixed(1),\n      avg_latency_p95: lat.toFixed(3),\n      health_score: healthScore\n    },\n    indicators: {\n      cpu: trend(cpu, 60, 80),\n      memory: trend(mem, 70, 85),\n      latency: trend(lat, 0.5, 1.5)\n    }\n  }\n}];"
+      },
+      "id": "52a13e7e-eef4-430c-929c-d56e3073bffa",
+      "name": "Compute Weekly Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat"
+      },
+      "id": "028d5040-2118-4d99-9a4c-f7977737fbd0",
+      "name": "AI - Generate Narrative",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [
+        448,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $('Compute Weekly Report').first().json;\nconst narrative = $('AI - Generate Narrative').first().json.message?.content ?? 'Narrative generation failed.';\n\nconst scoreEmoji = report.metrics.health_score >= 80 ? '💚' : report.metrics.health_score >= 60 ? '💛' : '❤️';\n\nconst slackBlocks = [\n  { type: 'header', text: { type: 'plain_text', text: `📊 Weekly Ops Report — ${report.report_date}` } },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*Health Score:*\\n${scoreEmoji} ${report.metrics.health_score}/100` },\n      { type: 'mrkdwn', text: `*Period:*\\n${report.week_start} → ${report.week_end}` }\n    ]\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*Avg CPU:*\\n${report.indicators.cpu} ${report.metrics.avg_cpu}%` },\n      { type: 'mrkdwn', text: `*Avg Memory:*\\n${report.indicators.memory} ${report.metrics.avg_memory}%` },\n      { type: 'mrkdwn', text: `*Avg Latency p95:*\\n${report.indicators.latency} ${report.metrics.avg_latency_p95}s` }\n    ]\n  },\n  { type: 'divider' },\n  { type: 'section', text: { type: 'mrkdwn', text: narrative } },\n  { type: 'context', elements: [{ type: 'mrkdwn', text: `Generated by AI-Ops Watchdog | ${new Date().toISOString()}` }] }\n];\n\nreturn [{ json: { report, narrative, slack_blocks: slackBlocks } }];"
+      },
+      "id": "5b98e2a9-d01c-4491-95a3-b5d693ba592b",
+      "name": "Build Slack Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ blocks: $json.slack_blocks }) }}",
+        "options": {}
+      },
+      "id": "d1004b55-1149-43b3-a66d-1407166378fe",
+      "name": "Send to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.REPORT_FROM_EMAIL }}",
+        "toEmail": "={{ $env.REPORT_TO_EMAIL }}",
+        "subject": "=[AI-Ops Watchdog] Weekly Report — {{ $('Compute Weekly Report').first().json.report_date }} | Health Score: {{ $('Compute Weekly Report').first().json.metrics.health_score }}/100",
+        "options": {}
+      },
+      "id": "78f7c68a-5c88-4db6-a9b8-2d3c95803908",
+      "name": "Send Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        240
+      ],
+      "webhookId": "88a31158-3990-49da-bda4-6aa4fe029751"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Sunday 8am": {
+      "main": [
+        [
+          {
+            "node": "Set Week Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Week Window": {
+      "main": [
+        [
+          {
+            "node": "Avg CPU - Week",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Avg Memory - Week",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Avg Latency - Week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avg CPU - Week": {
+      "main": [
+        [
+          {
+            "node": "Compute Weekly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avg Memory - Week": {
+      "main": [
+        [
+          {
+            "node": "Compute Weekly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avg Latency - Week": {
+      "main": [
+        [
+          {
+            "node": "Compute Weekly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Weekly Report": {
+      "main": [
+        [
+          {
+            "node": "AI - Generate Narrative",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Generate Narrative": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Report": {
+      "main": [
+        [
+          {
+            "node": "Send to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "fccc43eb-4684-4405-8958-30a9e1d58f9e",
+  "meta": {
+    "instanceId": "7f529f90c5d9464ac1f0ef25f1ea43cd6e4b761556ecf3874eade97f664ea915"
+  },
+  "id": "AIxpjn2IsWHC5Yy0",
+  "tags": []
+}

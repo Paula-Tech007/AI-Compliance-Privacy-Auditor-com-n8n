@@ -268,5 +268,5 @@ MIT — feito por [Paula-Tech007](https://github.com/Paula-Tech007)
 ---
 
 <div align="center">
-  <sub>Construído com n8n · GPT-4o · e muito ☕</sub>
+
 </div>

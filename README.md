@@ -263,7 +263,7 @@ Pull requests são bem-vindos. Para mudanças maiores, abra uma issue primeiro p
 
 ## 📄 Licença
 
-MIT — feito por [Paula-Tech007](https://github.com/Paula-Tech007)
+MIT — feito por [Paula-Tech007](https://github.com/Paula Sabino)
 
 ---
 
